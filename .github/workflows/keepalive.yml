@@ -1,0 +1,26 @@
+# Supabase na bezplatném tarifu uspí projekt po týdnu bez provozu.
+# Tenhle hlídač se každé 3 dny zeptá databáze na neexistující spis, aby zůstala vzhůru.
+# Adresu a veřejný klíč si sám přečte z config.js, žádné tajné údaje nepotřebuje.
+name: Supabase vzhůru
+
+on:
+  schedule:
+    - cron: "17 6 */3 * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ping
+        run: |
+          URL=$(sed -n 's/.*supabaseUrl: *"\([^"]*\)".*/\1/p' config.js)
+          KEY=$(sed -n 's/.*supabaseKey: *"\([^"]*\)".*/\1/p' config.js)
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then echo "Backend zatím není nastavený."; exit 0; fi
+          AUTH=()
+          case "$KEY" in eyJ*) AUTH=(-H "Authorization: Bearer $KEY");; esac
+          curl -fsS -X POST "${URL%/}/rest/v1/rpc/spis_nacist" \
+            -H "apikey: $KEY" "${AUTH[@]}" -H "Content-Type: application/json" \
+            -d '{"p_code":"aaaaa-aaaaa-aaaaa-aaaaa"}'
+          echo " – databáze je vzhůru."

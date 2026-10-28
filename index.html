@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Kdo platil?</title>
+<meta name="description" content="Sdílený detektivní spis: kdo naposledy platil brunch nebo kafe a dort.">
+<meta name="theme-color" content="#0e1526">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kdo platil">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Monoton&family=Limelight&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Courier+Prime:wght@400;700&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <h1 class="sign" aria-label="Kdo platil?"><span>K</span><span>D</span><span class="bad">O</span> <span>P</span><span>L</span><span>A</span><span class="bad">T</span><span>I</span><span>L</span><span>?</span></h1>
+    <svg class="scene" id="scene" viewBox="0 0 360 330" role="img" aria-label="Činžák v noci, rozsvícené je okno toho, kdo je na řadě s placením"></svg>
+    <div class="verdict" aria-live="polite">
+      <span class="eyebrow" id="eyebrow">Na řadě je</span>
+      <p class="next" id="next">…</p>
+      <p class="tag" id="tag">Otevírám spis.</p>
+      <span class="last" id="last"></span>
+    </div>
+  </header>
+
+  <!-- First run: create or join a shared case file -->
+  <section class="file" id="setup" aria-labelledby="h-setup" hidden>
+    <h2 id="h-setup">Nový případ</h2>
+    <div class="stack">
+      <p class="lead">Spis sdílíte ve dvou. Jeden ho založí, druhý se připojí kódem nebo pozvánkou.</p>
+      <button class="btn" type="button" id="create">Založit nový spis</button>
+      <div class="or"><span>nebo</span></div>
+      <form class="stack" id="join-form">
+        <label class="label" for="join-code">Mám kód spisu</label>
+        <input class="field" id="join-code" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="např. k7m2p-qx9ad-r4hwe-3nvzb" required>
+        <button class="ghost" type="submit" id="join">Připojit se ke spisu</button>
+      </form>
+      <p class="note" id="setup-msg" hidden></p>
+    </div>
+  </section>
+
+  <div id="main" class="main">
+    <section class="file" aria-labelledby="h-today">
+      <h2 id="h-today">Dnešní výslech</h2>
+      <div class="stack">
+        <div>
+          <div class="label" id="kind-label">Co se dneska jedlo</div>
+          <div class="seg" role="radiogroup" aria-labelledby="kind-label">
+            <input type="radio" name="kind" id="kind-brunch" value="brunch"><label for="kind-brunch"><b>Brunch</b><small>dražší hřích</small></label>
+            <input type="radio" name="kind" id="kind-cake" value="cake"><label for="kind-cake"><b>Kafe a dort</b><small>levnější hřích</small></label>
+          </div>
+        </div>
+        <div id="action"></div>
+      </div>
+    </section>
+
+    <section class="file" aria-labelledby="h-log">
+      <h2 id="h-log">Záznamy</h2>
+      <div class="stack">
+        <p class="remark" id="remark" hidden></p>
+        <ul class="log" id="log"></ul>
+        <p class="note" id="more" hidden></p>
+      </div>
+    </section>
+
+    <section class="file" aria-labelledby="h-stats">
+      <h2 id="h-stats">Statistika viny</h2>
+      <div class="stack">
+        <table>
+          <thead><tr><th>Podezřelý</th><th>Brunch</th><th>Kafe</th><th>Celkem</th></tr></thead>
+          <tbody id="stats"></tbody>
+        </table>
+        <p class="remark" id="dodge" hidden></p>
+      </div>
+    </section>
+
+    <section class="file">
+      <details id="settings">
+        <summary>Jména podezřelých</summary>
+        <form class="names" id="names-form">
+          <div class="nrow"><input id="name-a" maxlength="20" aria-label="Jméno první osoby" required><select id="g-a" aria-label="Rod první osoby"><option value="f">ona</option><option value="m">on</option></select></div>
+          <div class="nrow"><input id="name-b" maxlength="20" aria-label="Jméno druhé osoby" required><select id="g-b" aria-label="Rod druhé osoby"><option value="f">ona</option><option value="m">on</option></select></div>
+          <button class="ghost" type="submit">Uložit jména</button>
+          <p class="note">Rod hlídá, aby appka věděla, jestli „platil“, nebo „platila“. Gramatika je taky forma respektu.</p>
+        </form>
+      </details>
+    </section>
+
+    <section class="file" id="share-box" hidden>
+      <details id="share">
+        <summary>Sdílení spisu</summary>
+        <div class="stack" style="margin-top:14px">
+          <div class="label">Kód spisu</div>
+          <code class="code" id="code-view"></code>
+          <button class="ghost" type="button" id="invite">Poslat pozvánku</button>
+          <p class="note">Kdo má kód, může do spisu zapisovat. Posílej ho jen tomu, s kým se střídáš.</p>
+          <button class="link" type="button" id="leave">Odpojit tento telefon od spisu</button>
+        </div>
+      </details>
+    </section>
+  </div>
+
+  <footer class="foot" id="foot"></footer>
+</div>
+
+<div class="toast" id="toast" role="status"><span id="toast-t"></span><button id="toast-b" type="button" hidden>Vrátit</button></div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
