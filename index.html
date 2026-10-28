@@ -32,20 +32,17 @@
     </div>
   </header>
 
-  <!-- First run: create or join a shared case file -->
+  <!-- First run: paste the access key to the private data repo -->
   <section class="file" id="setup" aria-labelledby="h-setup" hidden>
-    <h2 id="h-setup">Nový případ</h2>
-    <div class="stack">
-      <p class="lead">Spis sdílíte ve dvou. Jeden ho založí, druhý se připojí kódem nebo pozvánkou.</p>
-      <button class="btn" type="button" id="create">Založit nový spis</button>
-      <div class="or"><span>nebo</span></div>
-      <form class="stack" id="join-form">
-        <label class="label" for="join-code">Mám kód spisu</label>
-        <input class="field" id="join-code" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="např. k7m2p-qx9ad-r4hwe-3nvzb" required>
-        <button class="ghost" type="submit" id="join">Připojit se ke spisu</button>
-      </form>
+    <h2 id="h-setup">Přístup ke spisu</h2>
+    <form class="stack" id="key-form">
+      <p class="lead">Spis leží v soukromém repozitáři <b id="repo-name"></b>. Appka do něj potřebuje přístupový klíč. Vložíš ho jen jednou a zůstane jen v tomhle telefonu.</p>
+      <label class="label" for="key-input">Přístupový klíč</label>
+      <input class="field" id="key-input" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="github_pat_…" required>
+      <button class="btn" type="submit" id="key-submit">Otevřít spis</button>
       <p class="note" id="setup-msg" hidden></p>
-    </div>
+      <p class="note">Klíč ti pošle ten, kdo spis založil. Na iPhonu nejdřív přidej appku na plochu a klíč vlož až do ní.</p>
+    </form>
   </section>
 
   <div id="main" class="main">
@@ -99,10 +96,11 @@
       <details id="share">
         <summary>Sdílení spisu</summary>
         <div class="stack" style="margin-top:14px">
-          <div class="label">Kód spisu</div>
+          <div class="label">Spis</div>
           <code class="code" id="code-view"></code>
+          <a class="link" id="history-link" href="#" target="_blank" rel="noopener">Celá historie spisu na GitHubu</a>
           <button class="ghost" type="button" id="invite">Poslat pozvánku</button>
-          <p class="note">Kdo má kód, může do spisu zapisovat. Posílej ho jen tomu, s kým se střídáš.</p>
+          <p class="note">Pozvánka obsahuje přístupový klíč. Pošli ji jen tomu, s kým se střídáš.</p>
           <button class="link" type="button" id="leave">Odpojit tento telefon od spisu</button>
         </div>
       </details>

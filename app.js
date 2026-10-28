@@ -2,9 +2,12 @@
   "use strict";
 
   const CFG = window.KDO_PLATIL_CONFIG || {};
-  const REMOTE = !!(CFG.supabaseUrl && CFG.supabaseKey);
+  const REPO = String(CFG.dataRepo || "").trim();
+  const FILE = String(CFG.dataPath || "spis.json").trim();
+  const REMOTE = /^[\w.-]+\/[\w.-]+$/.test(REPO);
+  const API = "https://api.github.com";
   const DEFAULT_PEOPLE = { a: { name: "Wendy", g: "f" }, b: { name: "Kamarád", g: "m" } };
-  const POLL_MS = 15000;
+  const POLL_MS = 20000;
 
   const LS = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -14,7 +17,8 @@
 
   const state = {
     mode: REMOTE ? "remote" : "local",
-    code: null,
+    token: null,
+    rev: 0,              // revision of the spis we show; stale reads (lower rev) are ignored
     people: structuredClone(DEFAULT_PEOPLE),
     log: [],
     loaded: false,
@@ -31,38 +35,81 @@
   const other = w => (w === "a" ? "b" : "a");
   const P = w => state.people[w];
   const g = (p, m, f) => (p.g === "f" ? f : m);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-  /* ================= backend (Supabase RPC over plain fetch) ================= */
-  async function rpc(fn, args) {
-    const headers = { "Content-Type": "application/json", apikey: CFG.supabaseKey };
-    // Legacy anon keys are JWTs and also go in Authorization; new sb_publishable_ keys must not.
-    if (CFG.supabaseKey.startsWith("eyJ")) headers.Authorization = "Bearer " + CFG.supabaseKey;
-    const res = await fetch(CFG.supabaseUrl.replace(/\/+$/, "") + "/rest/v1/rpc/" + fn, {
-      method: "POST", headers, body: JSON.stringify(args), cache: "no-store"
-    });
+  /* ================= backend: one JSON file in a private GitHub repo ================= */
+  const b64enc = s => { const b = new TextEncoder().encode(s); let bin = ""; for (const x of b) bin += String.fromCharCode(x); return btoa(bin); };
+  const b64dec = s => new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(/\s/g, "")), c => c.charCodeAt(0)));
+  const contentsUrl = () => `${API}/repos/${REPO}/contents/${FILE.split("/").map(encodeURIComponent).join("/")}`;
+
+  async function gh(url, opts = {}, token = state.token) {
+    const headers = Object.assign({
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      Authorization: "Bearer " + token
+    }, opts.body ? { "Content-Type": "application/json" } : {}, opts.headers || {});
+    const res = await fetch(url, { method: opts.method || "GET", headers, body: opts.body, cache: "no-store" });
+    if (res.status === 304) return { status: 304 };
     const text = await res.text();
-    if (!res.ok) { const e = new Error(text || res.statusText); e.status = res.status; throw e; }
-    return text ? JSON.parse(text) : null;
+    let body = null; try { body = text ? JSON.parse(text) : null; } catch (e) {}
+    if (!res.ok) { const e = new Error((body && body.message) || res.statusText); e.status = res.status; e.body = body; throw e; }
+    return { status: res.status, body, etag: res.headers.get("ETag") };
   }
 
-  /* ================= case codes ================= */
-  const ALPHA = "abcdefghjkmnpqrstuvwxyz23456789";
-  function genCode() {
-    const b = new Uint8Array(20); crypto.getRandomValues(b);
-    let s = ""; for (let i = 0; i < 20; i++) { s += ALPHA[b[i] % ALPHA.length]; if (i % 5 === 4 && i < 19) s += "-"; }
-    return s;
+  function emptyDoc() { return { app: "kdo-platil", rev: 0, people: structuredClone(DEFAULT_PEOPLE), log: [] }; }
+  function normDoc(d) {
+    const out = emptyDoc();
+    if (d && typeof d === "object") {
+      out.rev = Number.isFinite(d.rev) ? d.rev : 0;
+      out.people = normPeople(d.people);
+      out.log = (Array.isArray(d.log) ? d.log : []).filter(clean)
+        .map(e => ({ id: String(e.id), who: e.who, kind: e.kind === "brunch" ? "brunch" : "cake", at: e.at }))
+        .sort((x, y) => y.at - x.at);
+    }
+    return out;
   }
-  function normCode(raw) {
-    let s = String(raw || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (s.length !== 20) return null;
-    return s.match(/.{5}/g).join("-");
+
+  // Read the spis. Returns {doc, sha} or {doc:null, sha:null} if the file doesn't exist yet.
+  let etag = null;
+  async function readDoc(useEtag) {
+    try {
+      const r = await gh(contentsUrl(), useEtag && etag ? { headers: { "If-None-Match": etag } } : {});
+      if (r.status === 304) return { unchanged: true };
+      etag = r.etag;
+      return { doc: normDoc(JSON.parse(b64dec(r.body.content))), sha: r.body.sha };
+    } catch (e) {
+      if (e.status === 404) return { doc: null, sha: null };
+      throw e;
+    }
   }
-  function codeFromUrl() {
-    try { return normCode(new URLSearchParams(location.search).get("spis")); } catch (e) { return null; }
-  }
-  function putCodeInUrl(code) {
-    // The code stays in the address bar so "Add to Home Screen" on iPhone keeps it.
-    try { history.replaceState(null, "", location.pathname + (code ? "?spis=" + code : "")); } catch (e) {}
+
+  // Read → change → write with the file's sha. GitHub rejects the write if someone else
+  // committed in between (409/422); then we read again and retry. Reads can briefly lag
+  // behind a fresh commit, so a read older than what we already show is retried too.
+  async function mutate(change, message) {
+    let lastErr = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (attempt) await sleep(400 * attempt + Math.random() * 300);
+      try {
+        const { doc, sha } = await readDoc(false);
+        if (doc && doc.rev < state.rev) { lastErr = new Error("stale read"); continue; }
+        const base = doc || emptyDoc();
+        const next = change(structuredClone(base));
+        next.rev = Math.max(base.rev, state.rev) + 1;
+        next.updatedAt = new Date().toISOString();
+        const body = { message, content: b64enc(JSON.stringify(next, null, 2) + "\n") };
+        if (sha) body.sha = sha;
+        const r = await gh(contentsUrl(), { method: "PUT", body: JSON.stringify(body) });
+        etag = null;
+        applyDoc(normDoc(next), true);
+        return r;
+      } catch (e) {
+        lastErr = e;
+        if (e.status === 409 || e.status === 422) continue;
+        throw e;
+      }
+    }
+    throw lastErr;
   }
 
   /* ================= scene ================= */
@@ -146,7 +193,9 @@
     $("setup").hidden = !setup;
     $("main").hidden = setup;
     $("share-box").hidden = state.mode !== "remote";
-    if (state.code) $("code-view").textContent = state.code;
+    $("repo-name").textContent = REPO;
+    $("code-view").textContent = `${REPO} · ${FILE}`;
+    $("history-link").href = `https://github.com/${REPO}/commits`;
 
     $("plate-a").textContent = trunc(P("a").name.toUpperCase(), 11);
     $("plate-b").textContent = trunc(P("b").name.toUpperCase(), 11);
@@ -169,9 +218,8 @@
   function renderVerdict() {
     const last = state.log[0], stamp = $("stamp");
     if (state.mode === "setup") {
-      $("eyebrow").textContent = "Na řadě je";
       $("next").textContent = "Nikdo. Zatím.";
-      $("tag").textContent = "Nejdřív založ spis, nebo se připoj ke spisu kamaráda.";
+      $("tag").textContent = "Spis je zamčený. Vlož přístupový klíč a pustíme se do vyšetřování.";
       $("last").textContent = "";
     } else if (!state.loaded) {
       $("next").textContent = "…"; $("tag").textContent = "Otevírám spis."; $("last").textContent = "";
@@ -181,7 +229,6 @@
       $("last").textContent = "";
     } else {
       const nw = other(last.who), N = P(nw), L = P(last.who), t = taglines(N, L);
-      $("eyebrow").textContent = "Na řadě je";
       $("next").textContent = N.name;
       $("tag").textContent = t[state.log.length % t.length];
       let lt = `Naposledy: ${L.name} · ${kindName(last.kind)} · ${relDay(last.at)}`;
@@ -221,7 +268,7 @@
     ch.addEventListener("click", () => { state.changingMe = true; render(); });
     row.append(s, ch);
     const btn = document.createElement("button"); btn.type = "button"; btn.className = "btn"; btn.id = "pay-me";
-    btn.textContent = `Dneska jsem ${g(me, "platil", "platila")} já`;
+    btn.textContent = state.busy ? "Zapisuju do spisu…" : `Dneska jsem ${g(me, "platil", "platila")} já`;
     btn.disabled = !state.loaded || state.busy;
     btn.addEventListener("click", () => addEntry(state.me));
     const alt = document.createElement("button"); alt.type = "button"; alt.className = "link"; alt.id = "pay-other";
@@ -245,7 +292,7 @@
       const dt = document.createElement("span"); dt.className = "dt"; dt.textContent = fmt.format(new Date(e.at));
       const k = document.createElement("span"); k.className = "kind " + (e.kind === "brunch" ? "brunch" : "cake"); k.textContent = kindName(e.kind);
       li.append(no, nm, dt, k);
-      if (i === 0 && !String(e.id).startsWith("tmp")) {
+      if (i === 0 && !state.busy) {
         const u = document.createElement("button"); u.type = "button"; u.className = "undo" + (state.armedUndo ? " armed" : "");
         u.textContent = state.armedUndo ? "Opravdu smazat? Klepni znovu." : "Smazat tenhle záznam";
         u.addEventListener("click", () => {
@@ -292,9 +339,9 @@
   function renderFoot() {
     const f = $("foot"); f.replaceChildren();
     const line = t => { const d = document.createElement("div"); d.textContent = t; f.appendChild(d); };
-    if (state.mode === "local") line("Sdílený backend není nastavený. Spis se ukládá jen v tomto zařízení.");
+    if (state.mode === "local") line("Sdílený spis není nastavený. Ukládá se jen v tomto zařízení.");
     else if (state.mode === "remote") line(state.offline ? "Jsi offline. Ukazuju poslední známý stav spisu." : "Spis je sdílený. Co zapíše jeden, uvidí i druhý.");
-    if (!isStandalone() && state.mode !== "setup") {
+    if (!isStandalone()) {
       const d = document.createElement("div");
       d.append("Na iPhonu: ");
       const b = document.createElement("b"); b.textContent = "Sdílet → Přidat na plochu"; d.appendChild(b);
@@ -325,25 +372,34 @@
     return out;
   }
   const clean = e => e && (e.who === "a" || e.who === "b") && typeof e.at === "number";
-  const cacheKey = () => "kp-cache-" + state.code;
 
-  function applyRemote(d) {
-    state.people = normPeople(d.people);
-    state.log = (Array.isArray(d.log) ? d.log : []).filter(clean).map(e => ({ id: e.id, who: e.who, kind: e.kind === "brunch" ? "brunch" : "cake", at: e.at }));
+  function applyDoc(doc, force) {
+    if (!force && doc.rev < state.rev) return; // a lagging read; keep what we have
+    state.rev = doc.rev;
+    state.people = doc.people;
+    state.log = doc.log;
     state.loaded = true;
-    LS.set(cacheKey(), { people: state.people, log: state.log });
+    LS.set("kp-cache", { rev: doc.rev, people: doc.people, log: doc.log });
+  }
+
+  function handleError(e, what) {
+    if (e && e.status === 401) { leave("Klíč nefunguje nebo vypršel. Vlož nový."); return; }
+    if (e && (e.status === 403 || e.status === 404)) { toast(`${what} se nepovedlo: klíč nemá právo zapisovat do ${REPO}.`); return; }
+    if (e && e.status === 429) { toast("GitHub nás chvíli brzdí. Zkus to za minutu."); return; }
+    toast(`${what} se nepovedlo. Zkontroluj připojení a zkus to znovu.`);
   }
 
   let pulling = false;
   async function pull() {
-    if (state.mode !== "remote" || pulling) return;
+    if (state.mode !== "remote" || pulling || state.busy) return;
     pulling = true;
     try {
-      const d = await rpc("spis_nacist", { p_code: state.code });
-      if (d === null) { leave("Spis s tímhle kódem už neexistuje. Založ nový, nebo zadej jiný kód."); return; }
+      const r = await readDoc(true);
       state.offline = false;
-      applyRemote(d);
+      if (!r.unchanged) applyDoc(r.doc || emptyDoc(), false);
+      state.loaded = true;
     } catch (e) {
+      if (e.status === 401) { pulling = false; leave("Klíč nefunguje nebo vypršel. Vlož nový."); return; }
       state.offline = true;
     } finally {
       pulling = false;
@@ -354,24 +410,22 @@
   async function addEntry(who) {
     if (!state.loaded || state.busy) return;
     const p = P(who), kind = state.kind;
+    const verb = g(p, "zaplatil", "zaplatila");
     const msg = kind === "brunch"
-      ? `Zapsáno: ${p.name} ${g(p, "zaplatil", "zaplatila")} brunch. Avokádo putuje do spisu.`
-      : `Zapsáno: ${p.name} ${g(p, "zaplatil", "zaplatila")} kafe a dort. Dort byl jediný svědek.`;
+      ? `Zapsáno: ${p.name} ${verb} brunch. Avokádo putuje do spisu.`
+      : `Zapsáno: ${p.name} ${verb} kafe a dort. Dort byl jediný svědek.`;
+    const entry = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), who, kind, at: Date.now() };
     if (state.mode === "remote") {
-      const tmp = { id: "tmp" + Date.now(), who, kind, at: Date.now() };
-      state.busy = true; state.log.unshift(tmp); render();
+      state.busy = true; render();
       try {
-        const id = await rpc("spis_zapsat", { p_code: state.code, p_who: who, p_kind: kind });
-        state.busy = false;
-        toast(msg, () => removeEntry(id));
-        await pull();
+        await mutate(doc => { doc.log.unshift(entry); return doc; }, `${p.name} ${verb} ${kindName(kind)}`);
+        state.busy = false; render();
+        toast(msg, () => removeEntry(entry.id));
       } catch (e) {
-        state.busy = false;
-        state.log = state.log.filter(x => x !== tmp); render();
-        toast("Zápis se nepovedl. Zkontroluj připojení a zkus to znovu.");
+        state.busy = false; render();
+        handleError(e, "Zápis");
       }
     } else {
-      const entry = { id: "l" + Date.now(), who, kind, at: Date.now() };
       state.log.unshift(entry); LS.set("kp-log", state.log.slice(0, 500)); render();
       toast(msg, () => removeEntry(entry.id));
     }
@@ -379,82 +433,79 @@
 
   async function removeEntry(id) {
     if (state.mode === "remote") {
-      try { await rpc("spis_smazat", { p_code: state.code, p_id: id }); toast("Záznam smazán. Jako by se nikdy nestal."); await pull(); }
-      catch (e) { toast("Smazání se nepovedlo. Zkontroluj připojení a zkus to znovu."); }
+      const victim = state.log.find(e => e.id === id);
+      state.busy = true; render();
+      try {
+        await mutate(doc => { doc.log = doc.log.filter(e => e.id !== id); return doc; },
+          victim ? `Škrtnuto: ${P(victim.who).name}, ${kindName(victim.kind)}` : "Škrtnutý záznam");
+        state.busy = false; render();
+        toast("Záznam smazán. Jako by se nikdy nestal.");
+      } catch (e) { state.busy = false; render(); handleError(e, "Smazání"); }
     } else {
       state.log = state.log.filter(e => e.id !== id); LS.set("kp-log", state.log); render();
       toast("Záznam smazán. Jako by se nikdy nestal.");
     }
   }
 
-  /* ================= setup: create / join / leave ================= */
-  function useCode(code) {
-    state.code = code; state.mode = "remote";
-    LS.set("kp-code", code); putCodeInUrl(code);
-    const cached = LS.get(cacheKey(), null);
-    if (cached) { state.people = normPeople(cached.people); state.log = (cached.log || []).filter(clean); state.loaded = true; }
-    else { state.people = structuredClone(DEFAULT_PEOPLE); state.log = []; state.loaded = false; }
-    render();
-  }
+  /* ================= setup: access key ================= */
   function setupMsg(t) { const m = $("setup-msg"); m.hidden = !t; m.textContent = t || ""; }
-  function setupBusy(b) { $("create").disabled = b; $("join").disabled = b; }
 
-  $("create").addEventListener("click", async () => {
-    setupBusy(true); setupMsg("Zakládám spis…");
-    const code = genCode();
-    try {
-      await rpc("spis_zalozit", { p_code: code, p_people: DEFAULT_PEOPLE });
-      setupMsg(""); useCode(code); await pull();
-      $("share").open = true;
-      $("share-box").scrollIntoView({ behavior: "smooth", block: "center" });
-      toast("Spis založen. Teď pošli pozvánku kamarádovi.");
-    } catch (e) {
-      setupMsg("Spis se nepodařilo založit. Zkontroluj připojení a zkus to znovu.");
-    } finally { setupBusy(false); }
-  });
-
-  $("join-form").addEventListener("submit", async ev => {
+  $("key-form").addEventListener("submit", async ev => {
     ev.preventDefault();
-    const code = normCode($("join-code").value);
-    if (!code) { setupMsg("Kód má 20 znaků, třeba k7m2p-qx9ad-r4hwe-3nvzb. Zkontroluj ho."); return; }
-    setupBusy(true); setupMsg("Hledám spis…");
+    const token = $("key-input").value.trim();
+    if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(token)) {
+      setupMsg("Tohle nevypadá jako klíč z GitHubu. Začíná github_pat_ a je hodně dlouhý.");
+      return;
+    }
+    $("key-submit").disabled = true; setupMsg("Ověřuju klíč…");
     try {
-      const d = await rpc("spis_nacist", { p_code: code });
-      if (d === null) { setupMsg("Takový spis neexistuje. Zkontroluj kód."); return; }
-      setupMsg(""); useCode(code); applyRemote(d); render();
-      toast("Připojeno. Vítej ve spisu.");
+      await gh(`${API}/repos/${REPO}`, {}, token);
     } catch (e) {
-      setupMsg("Spis se nepodařilo načíst. Zkontroluj připojení a zkus to znovu.");
-    } finally { setupBusy(false); }
+      $("key-submit").disabled = false;
+      if (e.status === 401) setupMsg("GitHub klíč odmítl. Je celý a ještě platí?");
+      else if (e.status === 403 || e.status === 404) setupMsg(`Klíč funguje, ale nemá přístup k ${REPO}. Při vytváření klíče vyber právě tohle repo.`);
+      else setupMsg("GitHub teď neodpovídá. Zkontroluj připojení a zkus to znovu.");
+      return;
+    }
+    state.token = token; LS.set("kp-token", token);
+    state.mode = "remote"; state.loaded = false;
+    $("key-input").value = "";
+    setupMsg(""); render();
+    try {
+      const { doc } = await readDoc(false);
+      if (doc) applyDoc(doc, true);
+      else await mutate(d => d, "Založení spisu");
+      render();
+      toast(doc ? "Spis otevřen. Vítej ve vyšetřování." : "Spis založen. Teď pošli pozvánku.");
+    } catch (e) {
+      $("key-submit").disabled = false;
+      if (e.status === 403 || e.status === 404) leave(`Klíč smí číst, ale ne zapisovat. Při vytváření klíče nastav Contents na Read and write.`);
+      else { state.offline = true; render(); }
+    }
+    $("key-submit").disabled = false;
   });
 
   function leave(message) {
-    LS.del("kp-code");
-    state.code = null; state.mode = "setup"; state.loaded = false; state.log = []; state.armedLeave = false;
-    state.people = structuredClone(DEFAULT_PEOPLE);
-    putCodeInUrl(null);
+    LS.del("kp-token");
+    state.token = null; state.mode = "setup"; state.armedLeave = false; state.busy = false;
     render(); setupMsg(message || "");
   }
   $("leave").addEventListener("click", () => {
     if (!state.armedLeave) {
       state.armedLeave = true; render();
       setTimeout(() => { if (state.armedLeave) { state.armedLeave = false; render(); } }, 4000);
-    } else leave("Telefon je odpojený. Spis zůstává uložený, stačí zadat kód znovu.");
+    } else leave("Telefon je odpojený. Spis zůstává na GitHubu, stačí znovu vložit klíč.");
   });
 
   $("invite").addEventListener("click", async () => {
-    const url = location.origin + location.pathname + "?spis=" + state.code;
-    const text = "Pojď do spisu Kdo platil. Ať víme, kdo je na řadě.";
+    const url = location.origin + location.pathname;
+    const text = `Pojď do spisu Kdo platil.\n1) Otevři ${url} v Safari a dej Sdílet → Přidat na plochu.\n2) Spusť appku z plochy a vlož tenhle klíč:\n${state.token}`;
     if (navigator.share) {
-      try { await navigator.share({ title: "Kdo platil?", text, url }); return; }
+      try { await navigator.share({ title: "Kdo platil?", text }); return; }
       catch (e) { if (e && e.name === "AbortError") return; }
     }
-    try { await navigator.clipboard.writeText(text + " " + url); toast("Pozvánka je ve schránce. Vlož ji do zprávy."); }
-    catch (e) {
-      const r = document.createRange(); r.selectNodeContents($("code-view"));
-      const s = getSelection(); s.removeAllRanges(); s.addRange(r);
-      toast("Kód je označený. Zkopíruj ho a pošli.");
-    }
+    try { await navigator.clipboard.writeText(text); toast("Pozvánka je ve schránce. Vlož ji do zprávy."); }
+    catch (e) { toast("Pozvánku se nepodařilo zkopírovat. Pošli odkaz a klíč ručně."); }
   });
 
   /* ================= names & kind ================= */
@@ -467,14 +518,15 @@
       b: { name: $("name-b").value, g: $("g-b").value }
     });
     if (state.mode === "remote") {
-      try { await rpc("spis_jmena", { p_code: state.code, p_people: people }); }
-      catch (e) { toast("Jména se nepodařilo uložit. Zkontroluj připojení a zkus to znovu."); return; }
-    } else LS.set("kp-people", people);
-    state.people = people;
+      if (state.busy) return;
+      state.busy = true;
+      try { await mutate(doc => { doc.people = people; return doc; }, `Podezřelí: ${people.a.name} a ${people.b.name}`); }
+      catch (e) { state.busy = false; render(); handleError(e, "Uložení jmen"); return; }
+      state.busy = false;
+    } else { LS.set("kp-people", people); state.people = people; }
     $("settings").open = false;
     render();
     toast("Jména uložena. Identita podezřelých potvrzena.");
-    if (state.mode === "remote") pull();
   });
 
   /* ================= boot ================= */
@@ -486,9 +538,13 @@
       state.loaded = true;
       render();
     } else {
-      const code = codeFromUrl() || normCode(LS.get("kp-code", null));
-      if (code) { useCode(code); pull(); }
-      else { state.mode = "setup"; render(); }
+      state.token = LS.get("kp-token", null);
+      if (!state.token) { state.mode = "setup"; render(); }
+      else {
+        const cached = LS.get("kp-cache", null);
+        if (cached) applyDoc(normDoc(cached), true);
+        render(); pull();
+      }
       setInterval(() => { if (document.visibilityState === "visible") pull(); }, POLL_MS);
       document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pull(); });
       window.addEventListener("online", pull);

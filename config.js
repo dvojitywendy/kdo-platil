@@ -1,8 +1,7 @@
-// Nastavení sdíleného backendu (Supabase). Postup je v README.md.
-// Oba údaje najdeš v Supabase: Project Settings → API (Project URL a publishable/anon key).
-// Klíč je veřejný z principu: data chrání kód spisu a databázové funkce v supabase.sql.
-// Když jsou hodnoty prázdné, appka běží jen lokálně v jednom zařízení.
+// Kde leží spis. Repozitář má být SOUKROMÝ a oddělený od appky (postup je v README.md).
+// Přístupový klíč sem nepatří: každý ho vloží jednou do appky a zůstane jen v jeho telefonu.
+// Když je dataRepo prázdné, appka běží jen lokálně v jednom zařízení.
 window.KDO_PLATIL_CONFIG = {
-  supabaseUrl: "",
-  supabaseKey: ""
+  dataRepo: "dvojitywendy/kdo-platil-data",
+  dataPath: "spis.json"
 };
