@@ -452,9 +452,11 @@
 
   $("key-form").addEventListener("submit", async ev => {
     ev.preventDefault();
-    const token = $("key-input").value.trim();
-    if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(token)) {
-      setupMsg("Tohle nevypadá jako klíč z GitHubu. Začíná github_pat_ a je hodně dlouhý.");
+    // Accept the bare key or the whole pasted invite message: pick the key out of it.
+    const found = $("key-input").value.match(/(?:github_pat_|ghp_)[A-Za-z0-9_]{20,}/);
+    const token = found ? found[0] : "";
+    if (!token) {
+      setupMsg("Tohle nevypadá jako klíč z GitHubu. Začíná github_pat_ a je hodně dlouhý. Klidně vlož celou pozvánku.");
       return;
     }
     $("key-submit").disabled = true; setupMsg("Ověřuju klíč…");
