@@ -7,7 +7,6 @@ Je to PWA: běží v prohlížeči, na iPhonu se přidá na plochu a pak se chov
 ## Jak to funguje
 
 - **Body:** brunch = 2 body, kafe a dort = 1 bod. Na řadě je ten, kdo je v bodech pozadu. Při remíze ten, kdo neplatil naposledy.
-
 - **Appka** je statický web na GitHub Pages v tomhle repu (`index.html`, `app.css`, `app.js`).
 - **Spis** je jeden soubor `spis.json` v samostatném **soukromém** repu `kdo-platil-data`. Každé placení je commit, takže historie spisu je celá v gitu.
 - **Přístupový klíč** (fine-grained token) smí zapisovat jen do datového repa. Do kódu se nikdy nedává: každý ho jednou vloží do appky a zůstane jen v jeho telefonu.
