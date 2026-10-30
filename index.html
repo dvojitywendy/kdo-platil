@@ -29,6 +29,7 @@
       <p class="next" id="next">…</p>
       <p class="tag" id="tag">Otevírám spis.</p>
       <span class="last" id="last"></span>
+      <span class="score" id="score"></span>
     </div>
   </header>
 
@@ -52,8 +53,8 @@
         <div>
           <div class="label" id="kind-label">Co se dneska jedlo</div>
           <div class="seg" role="radiogroup" aria-labelledby="kind-label">
-            <input type="radio" name="kind" id="kind-brunch" value="brunch"><label for="kind-brunch"><b>Brunch</b><small>dražší hřích</small></label>
-            <input type="radio" name="kind" id="kind-cake" value="cake"><label for="kind-cake"><b>Kafe a dort</b><small>levnější hřích</small></label>
+            <input type="radio" name="kind" id="kind-brunch" value="brunch"><label for="kind-brunch"><b>Brunch</b><small>2 body</small><small>dražší hřích</small></label>
+            <input type="radio" name="kind" id="kind-cake" value="cake"><label for="kind-cake"><b>Kafe a dort</b><small>1 bod</small><small>levnější hřích</small></label>
           </div>
         </div>
         <div id="action"></div>
@@ -73,7 +74,7 @@
       <h2 id="h-stats">Statistika viny</h2>
       <div class="stack">
         <table>
-          <thead><tr><th>Podezřelý</th><th>Brunch</th><th>Kafe</th><th>Celkem</th></tr></thead>
+          <thead><tr><th>Podezřelý</th><th>Brunch</th><th>Kafe</th><th>Body</th></tr></thead>
           <tbody id="stats"></tbody>
         </table>
         <p class="remark" id="dodge" hidden></p>

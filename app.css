@@ -50,6 +50,8 @@ body{margin:0;min-height:100vh;background:var(--night);color:var(--cream);font:1
 .next{font:400 clamp(40px,13vw,60px)/1.02 var(--f-display);color:var(--mustard);margin:0;text-wrap:balance;text-shadow:3px 3px 0 var(--brick-dark);overflow-wrap:anywhere}
 .tag{margin:0 auto;max-width:34ch;color:var(--cream);text-wrap:balance}
 .last{font:14px var(--f-file);color:var(--dim)}
+.score{align-self:center;font:700 15px var(--f-file);color:var(--cream);font-variant-numeric:tabular-nums;border:1px dashed var(--panel-line);border-radius:4px;padding:4px 12px;margin-top:4px}
+.score:empty{display:none}
 
 /* --- case file cards --- */
 .file{background:var(--panel);border:1px solid var(--panel-line);border-radius:4px;padding:20px 18px 22px;position:relative;box-shadow:0 18px 40px -20px #000}

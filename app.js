@@ -176,6 +176,28 @@
   const fmt = new Intl.DateTimeFormat("cs-CZ", { weekday: "short", day: "numeric", month: "numeric" });
   const kindName = k => (k === "brunch" ? "brunch" : "kafe a dort");
 
+  // Points: brunch is twice the price of coffee and cake.
+  const PTS = { brunch: 2, cake: 1 };
+  const pts = e => PTS[e.kind] || 1;
+  const bodu = n => (n === 1 ? "bod" : n >= 2 && n <= 4 ? "body" : "bodů");
+  function scores() {
+    const s = { a: 0, b: 0 };
+    state.log.forEach(e => { s[e.who] += pts(e); });
+    return s;
+  }
+  // Whoever is behind on points pays next; on a tie, whoever didn't pay last.
+  function nextPayer() {
+    if (!state.log.length) return null;
+    const s = scores();
+    if (s.a !== s.b) return s.a < s.b ? "a" : "b";
+    return other(state.log[0].who);
+  }
+  function debtLine(N, d) {
+    if (d === 1) return `${N.name} je pozadu o 1 bod. Jeden dort a svědomí je zase čisté.`;
+    if (d === 2) return `${N.name} dluží 2 body. To je jeden brunch, nebo dva dorty. Vyber si svou pokutu.`;
+    return `${N.name} dluží ${d} ${bodu(d)}. Tohle už není zapomnětlivost, tohle je strategie.`;
+  }
+
   function taglines(N, L) {
     return [
       `${N.name}, peněženka se už nervózně ošívá. Nedělej, že nevíš.`,
@@ -228,14 +250,18 @@
       $("tag").textContent = "Spis je prázdný. Kdo zaplatí první, stává se hlavním podezřelým.";
       $("last").textContent = "";
     } else {
-      const nw = other(last.who), N = P(nw), L = P(last.who), t = taglines(N, L);
+      const nw = nextPayer(), N = P(nw), L = P(last.who), s = scores();
+      const debt = s[other(nw)] - s[nw];
+      const t = taglines(N, L);
       $("next").textContent = N.name;
-      $("tag").textContent = t[state.log.length % t.length];
+      $("tag").textContent = debt > 0 ? debtLine(N, debt) : t[state.log.length % t.length];
       let lt = `Naposledy: ${L.name} · ${kindName(last.kind)} · ${relDay(last.at)}`;
       if (dayDiff(last.at) >= 14) lt += ". Dva týdny bez kafe? Jste v pořádku?";
       $("last").textContent = lt;
+      $("score").textContent = `${P("a").name} ${s.a} : ${s.b} ${P("b").name}`;
     }
-    const nextW = last && state.mode !== "setup" ? other(last.who) : null;
+    if (!last || state.mode === "setup" || !state.loaded) $("score").textContent = "";
+    const nextW = last && state.mode !== "setup" ? nextPayer() : null;
     ["a", "b"].forEach(w => $("win-" + w).classList.toggle("lit", nextW === w));
     if (nextW) {
       stamp.setAttribute("transform", `translate(${nextW === "a" ? 98 : 262} 150) rotate(-8)`);
@@ -290,7 +316,7 @@
       const no = document.createElement("span"); no.className = "no"; no.textContent = "č. " + String(total - i).padStart(3, "0");
       const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = P(e.who).name;
       const dt = document.createElement("span"); dt.className = "dt"; dt.textContent = fmt.format(new Date(e.at));
-      const k = document.createElement("span"); k.className = "kind " + (e.kind === "brunch" ? "brunch" : "cake"); k.textContent = kindName(e.kind);
+      const k = document.createElement("span"); k.className = "kind " + (e.kind === "brunch" ? "brunch" : "cake"); k.textContent = `${kindName(e.kind)} · ${pts(e)} ${bodu(pts(e))}`;
       li.append(no, nm, dt, k);
       if (i === 0 && !state.busy) {
         const u = document.createElement("button"); u.type = "button"; u.className = "undo" + (state.armedUndo ? " armed" : "");
@@ -311,8 +337,10 @@
     const n = streak(), rm = $("remark");
     rm.hidden = n < 2;
     if (n >= 2) {
-      const p = P(log[0].who);
-      rm.textContent = `${p.name} ${g(p, "platil", "platila")} ${n}× po sobě. Buď je to velkorysost, nebo někdo hraje mrtvého brouka.`;
+      const w = log[0].who, p = P(w), s = scores();
+      rm.textContent = s[w] > s[other(w)]
+        ? `${p.name} ${g(p, "platil", "platila")} ${n}× po sobě a je v plusu. Buď je to velkorysost, nebo příprava na velkou prosbu.`
+        : `${p.name} ${g(p, "platil", "platila")} ${n}× po sobě, ale jen ${g(p, "splácel", "splácela")} dluh. Žádná velkorysost, čistá matematika.`;
     }
   }
 
@@ -322,14 +350,14 @@
     state.log.forEach(e => { c[e.who][e.kind === "brunch" ? "brunch" : "cake"]++; });
     ["a", "b"].forEach(w => {
       const tr = document.createElement("tr");
-      [P(w).name, c[w].brunch, c[w].cake, c[w].brunch + c[w].cake].forEach(v => { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); });
+      [P(w).name, c[w].brunch, c[w].cake, c[w].brunch * PTS.brunch + c[w].cake * PTS.cake].forEach(v => { const td = document.createElement("td"); td.textContent = v; tr.appendChild(td); });
       tb.appendChild(tr);
     });
     const d = $("dodge"), diff = c.a.brunch - c.b.brunch;
     d.hidden = Math.abs(diff) < 2;
     if (Math.abs(diff) >= 2) {
       const low = P(diff > 0 ? "b" : "a");
-      d.textContent = `${low.name} platí podezřele často jen kafe a dort. Náhoda? Detektivové na náhody nevěří.`;
+      d.textContent = `${low.name} platí podezřele často jen kafe a dort. Body sedí, ale detektivové na náhody nevěří.`;
     }
   }
 

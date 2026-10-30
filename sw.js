@@ -1,6 +1,6 @@
 // Service worker: app shell works offline, updates arrive whenever you're online.
 // Bump VERSION when shipping changes to force a clean cache.
-const VERSION = "kdo-platil-v3";
+const VERSION = "kdo-platil-v4";
 const SHELL = [
   "./",
   "index.html",
