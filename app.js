@@ -208,14 +208,34 @@
     if (s.a !== s.b) return s.a < s.b ? "a" : "b";
     return other(state.log[0].who);
   }
+  // Corporate humour: one of you still works in the corporation, the other one got out.
+  const CORP = CFG.corporatePerson === "a" ? "a" : "b";
+
+  const pick = (arr, salt = 0) => arr[(state.log.length + salt) % arr.length];
+
   function debtLine(N, d) {
-    if (d === 1) return `${N.name} je pozadu o 1 bod. Jeden dort a svědomí je zase čisté.`;
-    if (d === 2) return `${N.name} dluží 2 body. To je jeden brunch, nebo dva dorty. Vyber si svou pokutu.`;
-    return `${N.name} dluží ${d} ${bodu(d)}. Tohle už není zapomnětlivost, tohle je strategie.`;
+    // Classic and corporate variants share one pool; the rotation walks through all of them.
+    if (d === 1) return pick([
+      `${N.name} je pozadu o 1 bod. Jeden dort a svědomí je zase čisté.`,
+      `${N.name} má otevřený ticket na 1 bod. Priorita: vysoká. SLA: příští kafe.`,
+      `${N.name} má v backlogu 1 bod. Typický quick win.`,
+      `${N.name} je o bod pozadu. Malý blocker, velký morální problém.`
+    ]);
+    if (d === 2) return pick([
+      `${N.name} dluží 2 body. To je jeden brunch, nebo dva dorty. Vyber si svou pokutu.`,
+      `${N.name} dluží 2 body. Ve čtvrtletním reportu to nebude vypadat dobře.`,
+      `${N.name} dluží 2 story pointy. To je celý sprint jen na placení.`,
+      `${N.name} dluží 2 body. Navrhuju action plan o jednom kroku: brunch.`
+    ]);
+    return pick([
+      `${N.name} dluží ${d} ${bodu(d)}. Tohle už není zapomnětlivost, tohle je strategie.`,
+      `${N.name} dluží ${d} ${bodu(d)}. Tohle už je eskalace na management.`,
+      `${N.name} dluží ${d} ${bodu(d)}. Scope creep jako vyšitý.`
+    ]);
   }
 
-  function taglines(N, L) {
-    return [
+  function taglines(N, L, nw) {
+    const classic = [
       `${N.name}, peněženka se už nervózně ošívá. Nedělej, že nevíš.`,
       `Podle spisu jsi na řadě ty, ${N.name}. Spis nelže. Na rozdíl od tebe.`,
       `Minule ${g(L, "platil", "platila")} ${L.name}. ${N.name} si toho určitě ${g(N, "všiml", "všimla")}. Určitě.`,
@@ -223,6 +243,46 @@
       `${N.name}, tohle není obvinění. Tohle je účtenka.`,
       `Pachatelem příští platby je ${N.name}. Případ uzavřen, než vůbec začal.`
     ];
+    const paid = g(N, "nezaplatil", "nezaplatila");
+    const corp = nw === CORP ? [
+      `${N.name}, tohle není platba, to je strategická investice do vztahu se stakeholderem.`,
+      `Akční bod z minulého setkání: ${N.name} platí. Owner: ${N.name}. Deadline: dnes.`,
+      `${N.name}, dej to na cost center „Přátelství“. Schválí se to samo, bez tří podpisů.`,
+      `${N.name}, zaplať a pak to klidně odprezentuj jako win na all-hands.`,
+      `${N.name}, tohle sice není v roadmapě, ale je to na účtence.`,
+      `${N.name}, zaplať a zapiš si to do OKR jako klíčový výsledek čtvrtletí.`
+    ] : [
+      `${N.name} sice ${g(N, "utekl", "utekla")} z korporátu, ale z placení se neuteče.`,
+      `${g(N, "Bývalý kolega", "Bývalá kolegyně")} ${N.name} je na řadě. Některé procesy přežijí i odchod z firmy.`,
+      `${N.name}, v korporátu by se tohle řešilo na třech meetinzích. Tady stačí zaplatit.`,
+      `${N.name}, tady žádný reorg nepomůže. Na řadě jsi pořád ty.`,
+      `${N.name} už nemusí na standupy. Ke kase ale ano.`,
+      `${N.name} už nechodí na retrospektivy, tak tady je jedna: příště plať dřív.`
+    ];
+    const buzz = [
+      `Per my last coffee: na řadě je ${N.name}.`,
+      `Quick sync: ${N.name} platí, zbytek týmu dává thumbs up.`,
+      `Pojďme mít alignment: ${N.name} platí, ostatní jedí.`,
+      `Low-hanging fruit dne: ${N.name} zaplatí kafe a dort.`,
+      `${N.name}, nemáš na to bandwidth? Najdi ho. Ideálně u pokladny.`,
+      `Going forward platí ${N.name}. Respektive teď hned.`,
+      `Blocker identifikován: ${N.name} ještě ${paid}. Probíhá eskalace.`,
+      `Let's circle back k té platbě, ${N.name}. ASAP.`,
+      `${N.name}, tohle si offline nevezmeme. Tohle se zaplatí.`,
+      `Win-win: ${N.name} zaplatí a všichni ostatní vyhrají.`,
+      `Deep dive do spisu ukázal jediné: na řadě je ${N.name}.`,
+      `Spis je single source of truth. A ten říká ${N.name}.`,
+      `Hard stop v kavárně: dokud ${N.name} nezaplatí, nikdo neodchází.`,
+      `Brunch má 2 story pointy, dort 1. ${N.name} má zatím podezřele nízkou velocity.`
+    ];
+    // Rotate through classic, role-specific corporate, and buzzword lines in turn.
+    const out = [];
+    for (let i = 0; i < Math.max(classic.length, corp.length, buzz.length); i++) {
+      if (classic[i]) out.push(classic[i]);
+      if (corp[i]) out.push(corp[i]);
+      if (buzz[i]) out.push(buzz[i]);
+    }
+    return out;
   }
 
   /* ================= render ================= */
@@ -269,9 +329,10 @@
     } else {
       const nw = nextPayer(), N = P(nw), L = P(last.who), s = scores();
       const debt = s[other(nw)] - s[nw];
-      const t = taglines(N, L);
+      const t = taglines(N, L, nw);
       $("next").textContent = N.name;
-      $("tag").textContent = debt > 0 ? debtLine(N, debt) : t[state.log.length % t.length];
+      // Mostly the debt, but every third time a general line (the score below shows the debt anyway).
+      $("tag").textContent = debt > 0 && state.log.length % 3 !== 2 ? debtLine(N, debt) : t[state.log.length % t.length];
       let lt = `Naposledy: ${L.name} · ${kindName(last.kind)} · ${relDay(last.at)}`;
       if (dayDiff(last.at) >= 14) lt += ". Dva týdny bez kafe? Jste v pořádku?";
       $("last").textContent = lt;
@@ -356,7 +417,9 @@
     if (n >= 2) {
       const w = log[0].who, p = P(w), s = scores();
       rm.textContent = s[w] > s[other(w)]
-        ? `${p.name} ${g(p, "platil", "platila")} ${n}× po sobě a je v plusu. Buď je to velkorysost, nebo příprava na velkou prosbu.`
+        ? (w === CORP
+          ? `${p.name} ${g(p, "platil", "platila")} ${n}× po sobě a je v plusu. Korporát asi zavedl nový benefit.`
+          : `${p.name} ${g(p, "platil", "platila")} ${n}× po sobě a je v plusu. Buď je to velkorysost, nebo příprava na velkou prosbu.`)
         : `${p.name} ${g(p, "platil", "platila")} ${n}× po sobě, ale jen ${g(p, "splácel", "splácela")} dluh. Žádná velkorysost, čistá matematika.`;
     }
   }
@@ -562,9 +625,18 @@
     if (!state.loaded || state.busy) return;
     const p = P(who), kind = state.kind;
     const verb = g(p, "zaplatil", "zaplatila");
-    const msg = kind === "brunch"
-      ? `Zapsáno: ${p.name} ${verb} brunch. Avokádo putuje do spisu.`
-      : `Zapsáno: ${p.name} ${verb} kafe a dort. Dort byl jediný svědek.`;
+    const what = kind === "brunch" ? "brunch" : "kafe a dort";
+    const tails = [
+      kind === "brunch" ? "Avokádo putuje do spisu." : "Dort byl jediný svědek.",
+      who === CORP
+        ? (kind === "brunch" ? "Expense report tentokrát nepodávej." : "Ticket přesunut do Done.")
+        : (kind === "brunch" ? "Bez schvalovacího procesu, jak osvěžující." : "Žádný budget freeze, jen čistá radost."),
+      "Deliverable doručen, action item uzavřen.",
+      "Hotfix nasazen do produkce. Bez rollbacku.",
+      "Synergie potvrzena. Můžeme jít na další agendu.",
+      "Spis aktualizován. Single source of truth sedí."
+    ];
+    const msg = `Zapsáno: ${p.name} ${verb} ${what}. ${tails[state.log.length % tails.length]}`;
     const entry = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), who, kind, at: Date.now() };
     if (state.me) entry.by = state.me;
     if (state.mode === "remote") {

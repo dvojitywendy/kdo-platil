@@ -29,6 +29,7 @@ jobs:
       - name: Poslat upozornění
         env:
           MODE: ${{ github.event_name == 'push' && 'payment' || (github.event_name == 'schedule' && 'check' || 'test') }}
+          CORP_PERSON: b             # kdo je pořád v korporátu (a/b)
           VAPID_SUBJECT: https://dvojitywendy.github.io/kdo-platil/
           VAPID_PUBLIC_KEY: BKdHSKEhS7THUt5X3u2E08QrKImtFtBXg10wG1cZ7iO1ajMpTQz7B7rsdA22LH3EHwKp7ixBnHsiDkH4qaoweTY
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
@@ -58,6 +59,7 @@ jobs:
           /* ---- the same rules as the app ---- */
           const W = ["a", "b"];
           const other = w => (w === "a" ? "b" : "a");
+          const CORP = process.env.CORP_PERSON === "a" ? "a" : "b"; // who still works in the corporation
           const PTS = { brunch: 2, cake: 1 };
           const pts = e => PTS[e.kind] || 1;
           const bodu = n => (n === 1 ? "bod" : n >= 2 && n <= 4 ? "body" : "bodů");
@@ -97,17 +99,31 @@ jobs:
             const by = W.includes(e.by) ? e.by : e.who;
             const verb = g(payer, "zaplatil", "zaplatila");
             const out = [];
+            const style = log.length % 3; // 0 classic, 1 corporate (by role), 2 buzzwords
             for (const r of W) {
               if (r === by) continue; // whoever tapped the button already knows
               const me = P[r], debt = s[other(r)] - s[r];
+              const what = `${payer.name} ${verb} ${kindName(e.kind)}.`;
+              const owe = debt > 0 ? ` Dlužíš ${debt} ${bodu(debt)}.` : "";
               let body;
               if (e.who === r) {
                 // Someone else logged that you paid.
-                body = `${P[by].name} ${g(P[by], "zapsal", "zapsala")} do spisu, že jsi ${g(me, "platil", "platila")} ${kindName(e.kind)}. Spis děkuje za velkorysost.`;
+                const lead = `${P[by].name} ${g(P[by], "zapsal", "zapsala")} do spisu, že jsi ${g(me, "platil", "platila")} ${kindName(e.kind)}.`;
+                body = lead + [" Spis děkuje za velkorysost.", r === CORP ? " Ownership oceněn, bonus nečekej." : " Spis děkuje za proaktivní přístup.", " Deliverable potvrzen, díky za ownership."][style];
               } else if (nw === r) {
-                body = `${payer.name} ${verb} ${kindName(e.kind)}. Teď jsi na řadě ty` + (debt > 0 ? ` a dlužíš ${debt} ${bodu(debt)}.` : ".");
+                body = what + [
+                  ` Teď jsi na řadě ty` + (debt > 0 ? ` a dlužíš ${debt} ${bodu(debt)}.` : "."),
+                  r === CORP ? ` Ticket je přiřazený tobě. Hlavně ho neodsouvej do dalšího sprintu.${owe}`
+                             : ` Teď jsi na řadě ty. Výmluva na korporátní deadliny už neplatí.${owe}`,
+                  ` Nový action item je tvůj: příště platíš ty. Priorita: ASAP.${owe}`
+                ][style];
               } else {
-                body = `${payer.name} ${verb} ${kindName(e.kind)}. Na řadě je pořád ${P[nw].name}. Ty máš klid.`;
+                body = what + [
+                  ` Na řadě je pořád ${P[nw].name}. Ty máš klid.`,
+                  r === CORP ? ` Na řadě je pořád ${P[nw].name}. Ty máš klid jako v pátek po posledním meetingu.`
+                             : ` Na řadě je pořád ${P[nw].name}. Ty máš klid jako po odchodu z korporátu.`,
+                  ` Na řadě je pořád ${P[nw].name}. Ty máš na kafe plnou bandwidth.`
+                ][style];
               }
               if (fresh.length > 1) body += ` (Nových záznamů: ${fresh.length}.)`;
               out.push({ to: r, payload: { title: "Kdo platil?", body, tag: "platba" } });
@@ -122,11 +138,13 @@ jobs:
             if (days < 14 || days % 14 !== 0) return [];
             const nw = nextPayer(log);
             const intro = days === 14 ? "Dva týdny bez kafe. Jste v pořádku, nebo se jen vyhýbáte placení?"
-              : days === 28 ? "Čtyři týdny bez záznamu. Spis začíná prášit a dorty v kavárně tvrdnou."
+              : days === 28 ? "Čtyři týdny bez záznamu. Navrhuju quick sync u brunche. ASAP."
+              : days === 42 ? "Šest týdnů bez kafe. Tohle už není blocker, tohle je incident."
               : `${days} dní bez kafe. Buď jste přestali jíst dorty, nebo se přátelství rozpadlo. Spis doufá v to první.`;
+            const tail = r => (r === CORP ? "Chápu, Q4 a deadliny. Ale brunch je taky KPI." : "Ty už výmluvu na korporátní deadliny nemáš.");
             return W.map(r => ({
               to: r,
-              payload: { title: "Kontrola stavu", body: `${intro} ${nw === r ? "A na řadě jsi ty." : `Na řadě je ${P[nw].name}.`}`, tag: "kontrola" }
+              payload: { title: "Kontrola stavu", body: `${intro} ${tail(r)} ${nw === r ? "A na řadě jsi ty." : `Na řadě je ${P[nw].name}.`}`, tag: "kontrola" }
             }));
           }
 

@@ -7,5 +7,7 @@
 window.KDO_PLATIL_CONFIG = {
   dataRepo: "dvojitywendy/kdo-platil-data",
   dataPath: "spis.json",
-  vapidPublicKey: "BKdHSKEhS7THUt5X3u2E08QrKImtFtBXg10wG1cZ7iO1ajMpTQz7B7rsdA22LH3EHwKp7ixBnHsiDkH4qaoweTY"
+  vapidPublicKey: "BKdHSKEhS7THUt5X3u2E08QrKImtFtBXg10wG1cZ7iO1ajMpTQz7B7rsdA22LH3EHwKp7ixBnHsiDkH4qaoweTY",
+  // Kdo z vás je pořád v korporátu ("a" nebo "b"). Ten druhý je ten, kdo utekl. Řídí korporátní hlášky.
+  corporatePerson: "b"
 };
