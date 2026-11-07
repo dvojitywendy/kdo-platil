@@ -30,7 +30,7 @@ jobs:
         env:
           MODE: ${{ github.event_name == 'push' && 'payment' || (github.event_name == 'schedule' && 'check' || 'test') }}
           VAPID_SUBJECT: https://dvojitywendy.github.io/kdo-platil/
-          VAPID_PUBLIC_KEY: BCb3-1nndv-geN6xMobvV2_4latyB2pdRFqIlog7pN6xYVAcVl7BpL_tSx-8noe5OX8YkFUh_kbR1U-aBo0CQpk
+          VAPID_PUBLIC_KEY: BKdHSKEhS7THUt5X3u2E08QrKImtFtBXg10wG1cZ7iO1ajMpTQz7B7rsdA22LH3EHwKp7ixBnHsiDkH4qaoweTY
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
         run: |
           cat > notify.mjs <<'SCRIPT'

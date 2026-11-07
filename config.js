@@ -7,5 +7,5 @@
 window.KDO_PLATIL_CONFIG = {
   dataRepo: "dvojitywendy/kdo-platil-data",
   dataPath: "spis.json",
-  vapidPublicKey: "BCb3-1nndv-geN6xMobvV2_4latyB2pdRFqIlog7pN6xYVAcVl7BpL_tSx-8noe5OX8YkFUh_kbR1U-aBo0CQpk"
+  vapidPublicKey: "BKdHSKEhS7THUt5X3u2E08QrKImtFtBXg10wG1cZ7iO1ajMpTQz7B7rsdA22LH3EHwKp7ixBnHsiDkH4qaoweTY"
 };
