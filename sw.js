@@ -1,6 +1,6 @@
 // Service worker: app shell works offline, updates arrive whenever you're online.
 // Bump VERSION when shipping changes to force a clean cache.
-const VERSION = "kdo-platil-v4";
+const VERSION = "kdo-platil-v5";
 const SHELL = [
   "./",
   "index.html",
@@ -54,5 +54,29 @@ self.addEventListener("fetch", event => {
       )
     );
   }
-  // Everything else (the Supabase API) goes straight to the network.
+  // Everything else (the GitHub API) goes straight to the network.
+});
+
+// Notifications sent by the workflow in the data repo. iOS requires every push to show one.
+self.addEventListener("push", event => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; }
+  catch (e) { d = { body: event.data ? event.data.text() : "" }; }
+  event.waitUntil(self.registration.showNotification(d.title || "Kdo platil?", {
+    body: d.body || "Ve spisu se něco pohnulo.",
+    tag: d.tag || "kdo-platil",
+    icon: "icons/icon-192.png",
+    badge: "icons/icon-192.png",
+    data: { url: new URL("./", self.registration.scope).href }
+  }));
+});
+
+// Tapping a notification opens the app (or brings it to the front).
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const w of wins) { if ("focus" in w) return w.focus(); }
+    return self.clients.openWindow((event.notification.data && event.notification.data.url) || self.registration.scope);
+  })());
 });

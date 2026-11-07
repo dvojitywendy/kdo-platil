@@ -28,6 +28,16 @@ Je to PWA: běží v prohlížeči, na iPhonu se přidá na plochu a pak se chov
 3. V sekci **Sdílení spisu** klepni na **Poslat pozvánku**. Kamarád dostane odkaz, návod a klíč v jedné zprávě. GitHub účet nepotřebuje.
 4. Při prvním spuštění appka zjistí, kdo drží telefon. Pak už stačí jedno klepnutí.
 
+## Upozornění
+
+Když jeden zaplatí, druhému přijde notifikace. Když se dva týdny nic nezapíše, přijde oběma sarkastická kontrola stavu (a pak každé další dva týdny).
+
+- Funguje jen v appce přidané na plochu (iPhone s iOS 16.4 a novějším). V appce se zapíná v sekci **Upozornění**.
+- Posílá je GitHub Actions v datovém repu. Workflow je v tomhle repu ve složce `data-repo/` (`.github/workflows/notify.yml`) a patří do `kdo-platil-data` na stejnou cestu.
+- Workflow potřebuje v `kdo-platil-data` tajemství **VAPID_PRIVATE_KEY** (Settings → Secrets and variables → Actions). Veřejná polovina klíče je v `config.js`.
+- Zkouška: v `kdo-platil-data` → **Actions → Upozornění → Run workflow** pošle oběma zkušební notifikaci.
+- `data-repo/notify.mjs` je čitelná kopie skriptu, který je vložený ve workflow.
+
 ## Kdyby klíč unikl
 
 Na GitHubu ho smaž a vytvoř nový. Uniklý klíč umí přepsat jen spis, nic víc, a celou historii máš v commitech.

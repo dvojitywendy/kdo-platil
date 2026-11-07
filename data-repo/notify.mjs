@@ -1,0 +1,142 @@
+// Sends the spis notifications. Runs inside the data repo's GitHub Actions workflow.
+//   MODE=payment  after a commit to spis.json: tell the others about new payments
+//   MODE=check    daily: after 14, 28, 42… days without a payment, a sarcastic status check
+//   MODE=test     manual run: a test notification to everyone
+// DRY_RUN=1 prints the messages instead of sending them.
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+
+const MODE = process.env.MODE || "test";
+const DRY = process.env.DRY_RUN === "1";
+const FILE = process.env.SPIS_PATH || "spis.json";
+const TODAY = process.env.TODAY ? Date.parse(process.env.TODAY) : Date.now();
+
+const parse = t => { try { return JSON.parse(t); } catch (e) { return null; } };
+const current = () => (fs.existsSync(FILE) ? parse(fs.readFileSync(FILE, "utf8")) : null);
+function previous() {
+  if (process.env.PREV_FILE) return fs.existsSync(process.env.PREV_FILE) ? parse(fs.readFileSync(process.env.PREV_FILE, "utf8")) : null;
+  try { return parse(execFileSync("git", ["show", "HEAD~1:" + FILE], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })); }
+  catch (e) { return null; }
+}
+
+/* ---- the same rules as the app ---- */
+const W = ["a", "b"];
+const other = w => (w === "a" ? "b" : "a");
+const PTS = { brunch: 2, cake: 1 };
+const pts = e => PTS[e.kind] || 1;
+const bodu = n => (n === 1 ? "bod" : n >= 2 && n <= 4 ? "body" : "bodů");
+const kindName = k => (k === "brunch" ? "brunch" : "kafe a dort");
+function people(doc) {
+  const def = { a: { name: "Osoba A", g: "f" }, b: { name: "Osoba B", g: "m" } };
+  const p = (doc && doc.people) || {};
+  return Object.fromEntries(W.map(w => [w, {
+    name: (p[w] && typeof p[w].name === "string" && p[w].name.trim()) ? p[w].name.trim().slice(0, 20) : def[w].name,
+    g: p[w] && (p[w].g === "f" || p[w].g === "m") ? p[w].g : def[w].g
+  }]));
+}
+const g = (p, m, f) => (p.g === "f" ? f : m);
+const logOf = doc => (Array.isArray(doc && doc.log) ? doc.log : [])
+  .filter(e => e && W.includes(e.who) && typeof e.at === "number").sort((x, y) => y.at - x.at);
+function scores(log) { const s = { a: 0, b: 0 }; log.forEach(e => { s[e.who] += pts(e); }); return s; }
+function nextPayer(log) {
+  if (!log.length) return null;
+  const s = scores(log);
+  if (s.a !== s.b) return s.a < s.b ? "a" : "b";
+  return other(log[0].who);
+}
+const pragueDay = ts => {
+  const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Prague", year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date(ts)).split("-").map(Number);
+  return Date.UTC(y, m - 1, d) / 86400000;
+};
+
+/* ---- messages ---- */
+function paymentMessages(prev, cur) {
+  const P = people(cur), log = logOf(cur);
+  const seen = new Set(logOf(prev).map(e => String(e.id)));
+  const fresh = log.filter(e => !seen.has(String(e.id)));
+  if (!fresh.length) return [];
+  // One notification per person, about the newest payment; the rest is in the app.
+  const e = fresh[0], payer = P[e.who], nw = nextPayer(log), s = scores(log);
+  const by = W.includes(e.by) ? e.by : e.who;
+  const verb = g(payer, "zaplatil", "zaplatila");
+  const out = [];
+  for (const r of W) {
+    if (r === by) continue; // whoever tapped the button already knows
+    const me = P[r], debt = s[other(r)] - s[r];
+    let body;
+    if (e.who === r) {
+      // Someone else logged that you paid.
+      body = `${P[by].name} ${g(P[by], "zapsal", "zapsala")} do spisu, že jsi ${g(me, "platil", "platila")} ${kindName(e.kind)}. Spis děkuje za velkorysost.`;
+    } else if (nw === r) {
+      body = `${payer.name} ${verb} ${kindName(e.kind)}. Teď jsi na řadě ty` + (debt > 0 ? ` a dlužíš ${debt} ${bodu(debt)}.` : ".");
+    } else {
+      body = `${payer.name} ${verb} ${kindName(e.kind)}. Na řadě je pořád ${P[nw].name}. Ty máš klid.`;
+    }
+    if (fresh.length > 1) body += ` (Nových záznamů: ${fresh.length}.)`;
+    out.push({ to: r, payload: { title: "Kdo platil?", body, tag: "platba" } });
+  }
+  return out;
+}
+
+function checkMessages(cur, now) {
+  const P = people(cur), log = logOf(cur);
+  if (!log.length) return [];
+  const days = pragueDay(now) - pragueDay(log[0].at);
+  if (days < 14 || days % 14 !== 0) return [];
+  const nw = nextPayer(log);
+  const intro = days === 14 ? "Dva týdny bez kafe. Jste v pořádku, nebo se jen vyhýbáte placení?"
+    : days === 28 ? "Čtyři týdny bez záznamu. Spis začíná prášit a dorty v kavárně tvrdnou."
+    : `${days} dní bez kafe. Buď jste přestali jíst dorty, nebo se přátelství rozpadlo. Spis doufá v to první.`;
+  return W.map(r => ({
+    to: r,
+    payload: { title: "Kontrola stavu", body: `${intro} ${nw === r ? "A na řadě jsi ty." : `Na řadě je ${P[nw].name}.`}`, tag: "kontrola" }
+  }));
+}
+
+function testMessages(cur) {
+  const P = people(cur);
+  return W.map(r => ({
+    to: r,
+    payload: { title: "Zkouška spojení", body: `${P[r].name}, tohle je jen test. Kdyby šlo o placení, už bys ${g(P[r], "byl", "byla")} na řadě.`, tag: "test" }
+  }));
+}
+
+/* ---- send ---- */
+async function main() {
+  const cur = current();
+  if (!cur) { console.log("spis.json zatím neexistuje, není komu psát."); return; }
+  const msgs = MODE === "payment" ? paymentMessages(previous(), cur)
+    : MODE === "check" ? checkMessages(cur, TODAY)
+    : testMessages(cur);
+  if (!msgs.length) { console.log("Nic k odeslání."); return; }
+
+  const subs = w => (cur.push && Array.isArray(cur.push[w]) ? cur.push[w] : [])
+    .filter(s => s && typeof s.endpoint === "string" && s.endpoint.startsWith("https://") && s.keys && s.keys.p256dh && s.keys.auth);
+  let webpush = null;
+  if (!DRY) {
+    webpush = (await import("web-push")).default;
+    if (!process.env.VAPID_PRIVATE_KEY) { console.log("Chybí tajemství VAPID_PRIVATE_KEY v nastavení repa."); process.exit(1); }
+    webpush.setVapidDetails(process.env.VAPID_SUBJECT, process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
+  }
+  let sent = 0, targets = 0;
+  for (const m of msgs) {
+    const list = subs(m.to);
+    if (!list.length) { console.log(`${people(cur)[m.to].name}: upozornění nemá zapnutá.`); continue; }
+    for (const s of list) {
+      targets++;
+      if (DRY) { console.log(JSON.stringify({ to: m.to, endpoint: s.endpoint, ...m.payload })); sent++; continue; }
+      try {
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: s.keys }, JSON.stringify(m.payload), { TTL: 86400, urgency: "normal" });
+        sent++;
+        console.log(`${people(cur)[m.to].name}: odesláno.`);
+      } catch (err) {
+        const code = err && err.statusCode;
+        console.log(`${people(cur)[m.to].name}: ${code === 404 || code === 410 ? "telefon už upozornění nepřijímá (stačí je v appce zapnout znovu)" : "chyba " + (code || "") + " " + ((err && err.body) || (err && err.message) || "")}`);
+      }
+    }
+  }
+  console.log(`Hotovo: ${sent} z ${targets}.`);
+  if (MODE === "test" && sent === 0) process.exit(1);
+}
+main();

@@ -28,7 +28,11 @@
     me: LS.get("kp-me", null),
     changingMe: false,
     armedUndo: false,
-    armedLeave: false
+    armedLeave: false,
+    pushSubs: { a: [], b: [] },
+    pushStatus: "hidden",
+    pushEndpoint: null,
+    pushSaving: false
   };
 
   const $ = id => document.getElementById(id);
@@ -56,15 +60,27 @@
     return { status: res.status, body, etag: res.headers.get("ETag") };
   }
 
-  function emptyDoc() { return { app: "kdo-platil", rev: 0, people: structuredClone(DEFAULT_PEOPLE), log: [] }; }
+  function emptyDoc() { return { app: "kdo-platil", rev: 0, people: structuredClone(DEFAULT_PEOPLE), log: [], push: { a: [], b: [] } }; }
+  const validSub = s => s && typeof s.endpoint === "string" && /^https:\/\//.test(s.endpoint) &&
+    s.keys && typeof s.keys.p256dh === "string" && typeof s.keys.auth === "string";
   function normDoc(d) {
     const out = emptyDoc();
     if (d && typeof d === "object") {
       out.rev = Number.isFinite(d.rev) ? d.rev : 0;
       out.people = normPeople(d.people);
       out.log = (Array.isArray(d.log) ? d.log : []).filter(clean)
-        .map(e => ({ id: String(e.id), who: e.who, kind: e.kind === "brunch" ? "brunch" : "cake", at: e.at }))
+        .map(e => {
+          const x = { id: String(e.id), who: e.who, kind: e.kind === "brunch" ? "brunch" : "cake", at: e.at };
+          if (e.by === "a" || e.by === "b") x.by = e.by; // which phone wrote it (who not to notify)
+          return x;
+        })
         .sort((x, y) => y.at - x.at);
+      // Where to deliver notifications, per person (a phone or two each).
+      if (d.push && typeof d.push === "object") ["a", "b"].forEach(w => {
+        out.push[w] = (Array.isArray(d.push[w]) ? d.push[w] : []).filter(validSub)
+          .map(s => ({ endpoint: s.endpoint, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth }, at: Number(s.at) || 0 }))
+          .slice(-4);
+      });
     }
     return out;
   }
@@ -215,6 +231,7 @@
     $("setup").hidden = !setup;
     $("main").hidden = setup;
     $("share-box").hidden = state.mode !== "remote";
+    renderPush();
     $("repo-name").textContent = REPO;
     $("code-view").textContent = `${REPO} · ${FILE}`;
     $("history-link").href = `https://github.com/${REPO}/commits`;
@@ -278,7 +295,7 @@
       ["a", "b"].forEach(w => {
         const b = document.createElement("button"); b.type = "button"; b.className = "ghost";
         b.textContent = `Jsem ${P(w).name}`;
-        b.addEventListener("click", () => { state.me = w; state.changingMe = false; LS.set("kp-me", w); render(); });
+        b.addEventListener("click", () => { state.me = w; state.changingMe = false; LS.set("kp-me", w); render(); refreshPush(); });
         pick.appendChild(b);
       });
       const n = document.createElement("p"); n.className = "note"; n.style.marginTop = "10px";
@@ -406,8 +423,114 @@
     state.rev = doc.rev;
     state.people = doc.people;
     state.log = doc.log;
+    state.pushSubs = doc.push || { a: [], b: [] };
     state.loaded = true;
-    LS.set("kp-cache", { rev: doc.rev, people: doc.people, log: doc.log });
+    LS.set("kp-cache", { rev: doc.rev, people: doc.people, log: doc.log, push: state.pushSubs });
+  }
+
+  /* ================= notifications (delivered by a GitHub Actions workflow in the data repo) ================= */
+  const VAPID = String(CFG.vapidPublicKey || "").trim();
+  const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const pushCapable = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  function swReady() {
+    return Promise.race([navigator.serviceWorker.ready, sleep(6000).then(() => { throw new Error("service worker not ready"); })]);
+  }
+  function b64urlToBytes(s) {
+    const b = atob((s + "=".repeat((4 - (s.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(b, c => c.charCodeAt(0));
+  }
+  const subJson = sub => { const j = sub.toJSON(); return { endpoint: j.endpoint, keys: { p256dh: j.keys.p256dh, auth: j.keys.auth } }; };
+  const subOwner = endpoint => ["a", "b"].find(w => (state.pushSubs[w] || []).some(s => s.endpoint === endpoint)) || null;
+
+  // Store this phone's delivery address under the person holding it (and nowhere else).
+  function saveSub(js, who) {
+    return mutate(doc => {
+      ["a", "b"].forEach(w => { doc.push[w] = (doc.push[w] || []).filter(s => s.endpoint !== js.endpoint); });
+      if (who) doc.push[who] = [...doc.push[who], Object.assign({}, js, { at: Date.now() })].slice(-4);
+      return doc;
+    }, who ? `Upozornění zapnutá: ${P(who).name}` : "Upozornění vypnutá");
+  }
+
+  let pushChecking = false;
+  async function refreshPush() {
+    if (pushChecking) return;
+    let status = "hidden", sub = null;
+    if (!VAPID || state.mode !== "remote") status = "hidden";
+    else if (!pushCapable()) status = IS_IOS && !isStandalone() ? "needs-install" : "unsupported";
+    else if (Notification.permission === "denied") status = "denied";
+    else {
+      pushChecking = true;
+      try {
+        const reg = await swReady();
+        sub = await reg.pushManager.getSubscription();
+        status = sub && Notification.permission === "granted" ? "on" : "off";
+      } catch (e) { status = "unsupported"; }
+      finally { pushChecking = false; }
+    }
+    state.pushStatus = status;
+    state.pushEndpoint = sub ? sub.endpoint : null;
+    renderPush();
+    // Self-heal: subscribed here, but the spis doesn't know (or files it under the other person).
+    if (status === "on" && state.loaded && state.me && !state.busy && !state.pushSaving && subOwner(sub.endpoint) !== state.me) {
+      state.pushSaving = true;
+      try { await saveSub(subJson(sub), state.me); } catch (e) {} finally { state.pushSaving = false; renderPush(); }
+    }
+  }
+
+  async function enablePush() {
+    if (!state.me || state.pushSaving) return;
+    state.pushSaving = true; renderPush();
+    try {
+      // iOS only shows the prompt when this runs straight from the tap, so it goes first.
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { toast(perm === "denied" ? "Upozornění zůstávají vypnutá. Spis to bere jako přiznání." : "Upozornění zatím nezapnutá."); return; }
+      const reg = await swReady();
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(VAPID) });
+      await saveSub(subJson(sub), state.me);
+      toast("Upozornění zapnutá. Teď už nikdo nemůže tvrdit, že o ničem nevěděl.");
+    } catch (e) {
+      if (e && e.status) handleError(e, "Zapnutí upozornění");
+      else toast("Upozornění se nepodařilo zapnout. Zavři appku, otevři ji znovu a zkus to ještě jednou.");
+    } finally { state.pushSaving = false; refreshPush(); }
+  }
+
+  async function disablePush() {
+    if (state.pushSaving) return;
+    state.pushSaving = true; renderPush();
+    try {
+      const reg = await swReady();
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) { const js = subJson(sub); await sub.unsubscribe(); await saveSub(js, null); }
+      toast("Upozornění vypnutá. Zapomnětlivost je zase legální.");
+    } catch (e) {
+      if (e && e.status) handleError(e, "Vypnutí upozornění"); else toast("Upozornění se nepodařilo vypnout. Zkus to znovu.");
+    } finally { state.pushSaving = false; refreshPush(); }
+  }
+
+  function renderPush() {
+    const box = $("push-box"), body = $("push-body");
+    const st = state.pushStatus || "hidden";
+    box.hidden = st === "hidden" || state.mode !== "remote";
+    if (box.hidden) return;
+    body.replaceChildren();
+    const note = t => { const p = document.createElement("p"); p.className = "note"; p.textContent = t; body.appendChild(p); };
+    const button = (cls, text, fn) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = cls; b.textContent = text;
+      b.disabled = !!state.pushSaving || !state.loaded; b.addEventListener("click", fn); body.appendChild(b); return b;
+    };
+    const what = "Dozvíš se, když druhý zaplatí. A po dvou týdnech bez kafe přijde kontrola stavu.";
+    if (st === "needs-install") note("Upozornění fungují jen v appce z plochy. V Safari dej Sdílet → Přidat na plochu a otevři ji odtamtud.");
+    else if (st === "unsupported") note("Tenhle prohlížeč upozornění neumí. Na iPhonu je potřeba iOS 16.4 nebo novější a appka z plochy.");
+    else if (st === "denied") note("Upozornění jsou zakázaná. Povolíš je v Nastavení iPhonu → Notifikace → Kdo platil.");
+    else if (!state.me) note("Nejdřív nahoře vyber, kdo drží tenhle telefon. Spis potřebuje vědět, koho budit.");
+    else if (st === "on") {
+      note(`${P(state.me).name} má upozornění zapnutá. ${what}`);
+      const b = button("link", "Vypnout upozornění", disablePush); b.style.alignSelf = "flex-start";
+    } else {
+      note(what);
+      button("ghost", state.pushSaving ? "Zapínám…" : "Zapnout upozornění", enablePush);
+    }
   }
 
   function handleError(e, what) {
@@ -431,7 +554,7 @@
       state.offline = true;
     } finally {
       pulling = false;
-      if (state.mode === "remote") render();
+      if (state.mode === "remote") { render(); refreshPush(); }
     }
   }
 
@@ -443,6 +566,7 @@
       ? `Zapsáno: ${p.name} ${verb} brunch. Avokádo putuje do spisu.`
       : `Zapsáno: ${p.name} ${verb} kafe a dort. Dort byl jediný svědek.`;
     const entry = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), who, kind, at: Date.now() };
+    if (state.me) entry.by = state.me;
     if (state.mode === "remote") {
       state.busy = true; render();
       try {
@@ -507,6 +631,7 @@
       else await mutate(d => d, "Založení spisu");
       render();
       toast(doc ? "Spis otevřen. Vítej ve vyšetřování." : "Spis založen. Teď pošli pozvánku.");
+      refreshPush();
     } catch (e) {
       $("key-submit").disabled = false;
       if (e.status === 403 || e.status === 404) leave(`Klíč smí číst, ale ne zapisovat. Při vytváření klíče nastav Contents na Read and write.`);
